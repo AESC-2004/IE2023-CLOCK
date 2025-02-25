@@ -1,0 +1,48 @@
+# Ignorar archivos generados por Microchip Studio
+*.aps
+*.apz
+*.dsk
+*.o
+*.obj
+*.lst
+*.lss
+*.map
+*.elf
+*.eep
+*.hex
+*.cof
+*.sym
+*.exp
+*.bin
+*.srec
+*.srec.*
+*.s
+*.tmp
+*.dep
+*.tlog
+*.plg
+
+# Ignorar configuraciones del entorno de Microchip Studio
+*.user
+*.sdf
+*.opendb
+
+# Ignorar archivos de depuración
+*.bak
+*.suo
+*.ncb
+*.pdb
+*.ilk
+*.idb
+
+# Ignorar archivos de compilación y CMake (si usas)
+*.d
+*.gcda
+*.gcno
+*.gcov
+
+# Ignorar directorios de compilación
+build/
+Debug/
+Release/
+default/
