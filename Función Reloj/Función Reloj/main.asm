@@ -432,13 +432,13 @@ LOOP:
 		ADD		R16, R0
 		CPI		R16, 13
 		BREQ	REINICIAR_MESES
-		RJMP	TIME_DISPLAY
+		RJMP	DATE_DISPLAY
 		REINICIAR_MESES:
 			LDI		R16, 1
 			STS		MESES_UNIDADES, R16
 			LDI		R16, 0
 			STS		MESES_DECENAS, R16				;¡Meses debe empezar en 01!
-			RJMP	TIME_DISPLAY
+			RJMP	DATE_DISPLAY
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
@@ -513,8 +513,7 @@ LOOP:
 		;MESES_UNIDADES en DISP2:
 		LDI		ZL, LOW(DISP7SEG << 1)
 		LDI		ZH, HIGH(DISP7SEG << 1)
-		;PRUEBA!!!!!
-		LDS		R16, HORAS_UNIDADES
+		LDS		R16, MESES_UNIDADES
 		ADD		ZL, R16
 		ADC		ZH, R5								;R5=0
 		LPM		R16, Z
@@ -522,8 +521,7 @@ LOOP:
 		;MESES_DECENAS en DISP3:
 		LDI		ZL, LOW(DISP7SEG << 1)
 		LDI		ZH, HIGH(DISP7SEG << 1)
-		;PRUEBA!!!!!
-		LDS		R16, HORAS_DECENAS
+		LDS		R16, MESES_DECENAS
 		ADD		ZL, R16
 		ADC		ZH, R5								;R5=0
 		LPM		R16, Z

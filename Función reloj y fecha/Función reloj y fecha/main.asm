@@ -1,5 +1,5 @@
 ;
-; Función reloj.asm
+; Función reloj y fecha.asm
 ;
 ; Created: 11/03/2025 08:47:04 p. m.
 ; Author : ang50
@@ -8,7 +8,7 @@
 
 ;***************************************************************************************************************************
 ; Función "Mostrar Hora" y "Mostrar Fecha" del reloj digital.
-; Las funciones, momentáneamente, se cambiarán en programación, no con la interfaz del usuario.
+; Las funciones se deberán cambiar con el encoder.
 
 ; --> Se utilizará TIM0 en 1ms para multiplexar displays y para incrementar variables de conteo de milisegundos.
 ; --> Se llevará la cuenta de milisegundos con registros de propósito general.
@@ -70,6 +70,9 @@
 .equ			DISPMODE_F			= 0x010F
 .equ			DISPMODE_A			= 0x0110
 
+; Variables de modo
+.equ			MODO				= 0x0111
+
 ; Días de cada mes (Solo primera localidad para apuntar con el XPointer)
 .equ			DIAS_DE_MESES		= 0x0200
 ;***************************************************************************************************************************
@@ -80,6 +83,9 @@
 .CSEG
 .org 0x0000
 	RJMP SETUP
+;Guardamos un salto a la sub-rutina "PIN_CHANGE" en el vector de interrupción necesario
+.org PCI1addr ;Pin Change Interrupt 1 (PORTC)
+	RJMP PC_INTERRUPT
 ; Guardamos un salto a la sub-rutina "TIM1_INTERRUPT" en el vector de interrupción necesario
 .org OVF1addr
 	RJMP TIM1_INTERRUPT
@@ -169,6 +175,12 @@ SETUP:
 	OUT		DDRB, R16
 	LDI		R16, 0b00000001							;		¡Comienza un display encendido!
 	OUT		PORTB, R16
+
+	; PORTC: Entradas de encoder y optoacoplador	|		PORTC: {0,0,0,0,OA,B0,B1,PB}
+	LDI		R16, 0
+	OUT		DDRC, R16
+	LDI		R16, 0b00000001							;		¡Solo PB requiere PULLUP!
+	OUT		PORTC, R16
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
@@ -206,6 +218,15 @@ SETUP:
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
+	; Configuramos las interrupciones de PINCHANGE en PORTC:
+
+	LDI		R16, (1 << PCIE1)
+    STS		PCICR, R16	
+	LDI		R16, 0b00000011							; ¡Solo queremos leer PB y B0!
+	STS		PCMSK1, R16	
+	;***********************************************************************************************************************
+
+	;***********************************************************************************************************************
 	; Algunos valores iniciales:
 
 	; Valores iniciales de variables de conteo
@@ -220,12 +241,11 @@ SETUP:
 	LDI		R16, 0
 	STS		MINUTOS_UNIDADES, R16
 	STS		MINUTOS_DECENAS, R16
-	;Prueba, je
 	LDI		R16, 0
 	STS		HORAS_UNIDADES, R16
 	LDI		R16, 0
 	STS		HORAS_DECENAS, R16
-	LDI		R16, 3
+	LDI		R16, 1
 	STS		DIAS_UNIDADES, R16						; ¡Días debe empezar en 01!
 	LDI		R16, 0
 	STS		DIAS_DECENAS, R16
@@ -432,103 +452,109 @@ LOOP:
 		ADD		R16, R0
 		CPI		R16, 13
 		BREQ	REINICIAR_MESES
-		RJMP	TIME_DISPLAY
+		RJMP	REVISAR_MODO
 		REINICIAR_MESES:
 			LDI		R16, 1
 			STS		MESES_UNIDADES, R16
 			LDI		R16, 0
 			STS		MESES_DECENAS, R16				;¡Meses debe empezar en 01!
-			RJMP	TIME_DISPLAY
+			RJMP	REVISAR_MODO
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
-	; TERCER PASO: Actualizar valores HEX para displays (Funciones TIME_DISPLAY y DATE_DISPLAY).
+	; TERCER PASO: Actualizar valores HEX para displays (Funciones TIME_DISPLAY y DATE_DISPLAY). Depende del valor de MODO.
 
-	TIME_DISPLAY:
-		;DISPMODE_VALUE debe ser "H", así que ajustamos el XPointer y guardamos
-		LDI		XL, LOW(DISPMODE_H)
-		LDI		XH, HIGH(DISPMODE_H)
-		LD		R16, X
-		STS		DISPMODE_VALUE, R16
-		;Guardamos DISPS 0&1 con los HEX de MINUTOS_UNIDADES y MINUTOS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;MINUTOS_UNIDADES en DISP0:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MINUTOS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP0_VALUE, R16
-		;MINUTOS_DECENAS en DISP1:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MINUTOS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP1_VALUE, R16
-		;Guardamos DISPS 2&3 con los HEX de HORAS_UNIDADES y HORAS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;HORAS_UNIDADES en DISP2:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, HORAS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP2_VALUE, R16
-		;HORAS_DECENAS en DISP3:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, HORAS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP3_VALUE, R16
-		JMP		LOOP
+	REVISAR_MODO:
+		;Si MODO(0)=0, se muestra TIME_DISPLAY
+		;Si no, se muestra DATE_DISPLAY
+		LDS		R16, MODO
+		ANDI	R16, 0b00000001
+		CPI		R16, 0
+		BREQ	TIME_DISPLAY
+		RJMP	DATE_DISPLAY
+		TIME_DISPLAY:
+			;DISPMODE_VALUE debe ser "H", así que ajustamos el XPointer y guardamos
+			LDI		XL, LOW(DISPMODE_H)
+			LDI		XH, HIGH(DISPMODE_H)
+			LD		R16, X
+			STS		DISPMODE_VALUE, R16
+			;Guardamos DISPS 0&1 con los HEX de MINUTOS_UNIDADES y MINUTOS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;MINUTOS_UNIDADES en DISP0:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MINUTOS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP0_VALUE, R16
+			;MINUTOS_DECENAS en DISP1:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MINUTOS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP1_VALUE, R16
+			;Guardamos DISPS 2&3 con los HEX de HORAS_UNIDADES y HORAS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;HORAS_UNIDADES en DISP2:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, HORAS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP2_VALUE, R16
+			;HORAS_DECENAS en DISP3:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, HORAS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP3_VALUE, R16
+			JMP		LOOP
 
-	DATE_DISPLAY:
-		;DISPMODE_VALUE debe ser "F", así que ajustamos el XPointer y guardamos
-		LDI		XL, LOW(DISPMODE_F)
-		LDI		XH, HIGH(DISPMODE_F)
-		LD		R16, X
-		STS		DISPMODE_VALUE, R16
-		;Guardamos DISPS 0&1 con los HEX de DIAS_UNIDADES y DIAS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;DIAS_UNIDADES en DISP0:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, DIAS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP0_VALUE, R16
-		;DIAS_DECENAS en DISP1:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, DIAS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP1_VALUE, R16
-		;Guardamos DISPS 2&3 con los HEX de MESES_UNIDADES y MESES_DECENAS respectivamente (Ajustamos el ZPointer)
-		;MESES_UNIDADES en DISP2:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		;PRUEBA!!!!!
-		LDS		R16, HORAS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP2_VALUE, R16
-		;MESES_DECENAS en DISP3:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		;PRUEBA!!!!!
-		LDS		R16, HORAS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP3_VALUE, R16
-		JMP		LOOP
+		DATE_DISPLAY:
+			;DISPMODE_VALUE debe ser "F", así que ajustamos el XPointer y guardamos
+			LDI		XL, LOW(DISPMODE_F)
+			LDI		XH, HIGH(DISPMODE_F)
+			LD		R16, X
+			STS		DISPMODE_VALUE, R16
+			;Guardamos DISPS 0&1 con los HEX de DIAS_UNIDADES y DIAS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;DIAS_UNIDADES en DISP0:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, DIAS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP0_VALUE, R16
+			;DIAS_DECENAS en DISP1:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, DIAS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP1_VALUE, R16
+			;Guardamos DISPS 2&3 con los HEX de MESES_UNIDADES y MESES_DECENAS respectivamente (Ajustamos el ZPointer)
+			;MESES_UNIDADES en DISP2:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MESES_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP2_VALUE, R16
+			;MESES_DECENAS en DISP3:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MESES_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							;R5=0
+			LPM		R16, Z
+			STS		DISP3_VALUE, R16
+			JMP		LOOP
 
 	;***********************************************************************************************************************
 
@@ -545,6 +571,7 @@ TIM1_INTERRUPT:
 	PUSH	R16
 	PUSH	R17
 	PUSH	R18
+	;¡No hay interrupciones anidadas!
 	;Reseteamos TIM1
 	LDI		R16, T1VALUE_H
 	STS		TCNT1H, R16
@@ -561,6 +588,105 @@ TIM1_INTERRUPT:
 		POP		R16
 		RETI
 
+PC_INTERRUPT:
+	;Empujamos registros al STACK
+	PUSH	R16
+	IN		R16, SREG
+	PUSH	R16
+	PUSH	R17
+	PUSH	R18
+	;Habilitamos interrupciones anidadas (Solo para TIM1, así que se desactiva TIMSK0)
+	LDI		R16, (0 << TOIE0) 
+	STS		TIMSK0, R16
+	SEI
+	;Es de aclarar: El encoder cambiará su funcionalidad según el modo general en que se encuentre el reloj, pero...
+	;de momento solo interesa cambiar MODO.
+	;Si MODO(1)=1, se habilita cambiar de modo. Si MODO(1)=0, NO se habilita cambiar de modo.
+	;MODO(0) almacena si se quiere mostrar TIME o DATE.
+	;Solo me importan los flancos de bajada de PINC0 (PB del encoder)
+	;Solo me importan los falncos de bajada de PINC1 (Perilla del encoder)
+	;Entonces:
+	;Si PINC0 está encendido, no me importa... lo salto
+	;Si está en flanco de bajada, el PB fue presionado y CAMBIAMOS MODO(1).
+	SBIS	PINC, 0
+	RJMP	CAMBIAR_MODO_1
+	REVISAR_PINC1:
+	;Si PINC1 está encendido, no me importa... lo salto
+	;Si está en flanco de bajada, cambió la perilla; revisamos si cambiamos MODO(0) o no.
+	SBIS	PINC, 1
+	RJMP	CAMBIAR_MODO_0
+	;Si ninguno está en flanco de bajada, salimos
+	RJMP	PC_EXIT
+	CAMBIAR_MODO_1:
+		;Revisamos si MODO(1) ESTABA encendido
+		;Si sí, lo apagamos, y vamos a revisar PINC1
+		;Si no, lo encendemos, y vamos a revisar PINC1
+		LDS		R16, MODO
+		ANDI	R16, 0b00000010
+		CPI		R16, 0b00000010
+		BREQ	DESHABILITAR_MODO_1
+		RJMP	HABILITAR_MODO_1
+		DESHABILITAR_MODO_1:
+			LDI		R16, 0
+			LDS		R17, MODO
+			ANDI	R17, 0b00000001
+			OR		R16, R17
+			STS		MODO, R16
+			RJMP	REVISAR_PINC1
+		HABILITAR_MODO_1:
+			LDI		R16, 0b00000010
+			LDS		R17, MODO
+			ANDI	R17, 0b00000001
+			OR		R16, R17
+			STS		MODO, R16
+			RJMP	REVISAR_PINC1
+	CAMBIAR_MODO_0:
+		;Revisamos si es correcto modificar MODO(0) con base en la bandera en MODO(1)
+		;Si MODO(1) está encendida, SÍ CAMBIAMOS MODO(0); revisamos PINC2 para saber si incrementar o decrementar
+		;Si no... NO CAMBIAMOS MODO(0) y nos salimos
+		LDS		R16, MODO
+		ANDI	R16, 0b00000010
+		CPI		R16, 0b00000010
+		BREQ	REVISAR_PINC2
+		RJMP	PC_EXIT
+		REVISAR_PINC2:
+			;Si PINC2 está encendido, es ADELANTE
+			;Si PINC2 está apagado, es ATRAS
+			SBIS	PINC, 2
+			RJMP	DECREMENTAR_MODO_0
+			RJMP	INCREMENTAR_MODO_0
+		DECREMENTAR_MODO_0:
+			LDS		R16, MODO
+			ANDI	R16, 0b00000001
+			CPI		R16, 0
+			BREQ	ENCENDER_MODO_0
+			RJMP	APAGAR_MODO_0
+		INCREMENTAR_MODO_0:
+			LDS		R16, MODO
+			ANDI	R16, 0b00000001
+			CPI		R16, 0
+			BREQ	ENCENDER_MODO_0
+			RJMP	APAGAR_MODO_0
+			ENCENDER_MODO_0:
+			LDS		R16, MODO
+			ORI		R16, 0b00000001
+			STS		MODO, R16
+			APAGAR_MODO_0:
+			LDS		R16, MODO
+			ANDI	R16, 0b00000010
+			STS		MODO, R16
+	PC_EXIT:
+		;Re-habilitamos TIMSK0
+		LDI		R16, (0 << TOIE0) 
+		STS		TIMSK0, R16
+		;Y sacamos registros del STACK
+		POP		R18
+		POP		R17
+		POP		R16
+		OUT		SREG, R16
+		POP		R16
+		RETI
+
 TIM0_INTERRUPT:	
 	;Empujamos registros al STACK
 	PUSH	R16
@@ -569,9 +695,9 @@ TIM0_INTERRUPT:
 	PUSH	R17
 	PUSH	R18
 	;Habilitamos interrupciones anidadas (Solo para TIM1, así que se desactiva PCIE)
-	SEI
 	LDI		R16, (0 << PCIE1)
     STS		PCICR, R16
+	SEI
 	;Reseteamos TIM0
 	LDI		R16, T0VALUE
 	OUT		TCNT0, R16
