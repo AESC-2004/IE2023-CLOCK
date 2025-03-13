@@ -16,6 +16,19 @@
 
 ; --> Cada display tendrá una localidad en RAM para guardar su valor HEX que tiene que "sacar" PORTD.
 
+; --> Se utilizará un registro de propósito general nombrado "MODO" cuya función será guardar "flags" varias.
+; --> Su CÓDIFICACIÓN es la siguiente: {000, BLINKSTATE, SETUP_, MODE_SELECT, MODO1, MODO0}
+; --> "MODOn" indica si se debe MOSTRAR "Hora", "Fecha" o "Alarma"; sea en modo normal o en configuración.
+;     "00" es "Hora", "01" es "Fecha", y "10" es Alarma".
+; --> "SETUP_" indica si se busca configurar algún modo de los mencionados arriba. Ello supone un parpadeo en DISPS0,1,2,3.
+; --> "MODE_SELECT" indica si el usuario busca cambiar de modo. Ello supone un parpadeo en DISPMODE.
+; --> "MODE_SELECT" y "SETUP_" no pueden estar encendidos a la vez. Ello se detallará con la interfaz del usuario.
+; --> "BLINKSTATE" indica en qué estado deben estar los DISPS en su posible parpadeo para que sea interpretado por...
+;     la multiplexación en la interrupción de TIM0. Los displays deben parpadear acorde a los dos puntos.
+
+; --> Se utilizará un registro de propósito general para guardar el órden de mulltiplexación de Displays en caso de...
+;     existir parpadeo. Ello para evitar "ghosting" o pérdida de secuencia.
+
 ; --> Se utilizará TIM1 en 1s para conteo general de segundos.
 ; --> Se llevará la cuenta de segundos con un registro de propósito general.
 ; --> TIM1 tendrá prioridad sobre TIM0, por lo que, en TIM0, se activarán interrupciones anidadas SOLO de TIM1.
@@ -43,6 +56,13 @@
 .equ			T1VALUE_L			= 0x06
 .equ			T1VALUE_H			= 0x00
 .equ			T0VALUE				= 6
+
+; Bits característicos del registro "MODO":
+.equ			BLINKSTATE			= 4
+.equ			SETUP_				= 3
+.equ			MODE_SELECT			= 2
+.equ			MODO1				= 1
+.equ			MODO0				= 0
 ;***************************************************************************************************************************
 
 ;***************************************************************************************************************************
@@ -97,6 +117,8 @@
 .def			msCOUNT0		= R20 
 .def			msCOUNT1		= R21
 .def			sCOUNT			= R22 
+.def			MODO			= R23
+.def			MUX_SECUENCIA	= R24
 ;***************************************************************************************************************************
 
 
@@ -167,7 +189,7 @@ SETUP:
 	; PORTB: Transistores de displays y Buzzer		|		PORTB: {0,0,BUZZER,DMODE,D3,D2,D1,D0}
 	LDI		R16, 0xFF
 	OUT		DDRB, R16
-	LDI		R16, 0b00000001							;		¡Comienza un display encendido!
+	LDI		R16, 0b00000000							;		¡MUX_SECUENCIA se encargará de llevar el orden!
 	OUT		PORTB, R16
 	;***********************************************************************************************************************
 
@@ -213,6 +235,8 @@ SETUP:
 	LDI		msCOUNT0, 0
 	LDI		msCOUNT1, 0
 	LDI		sCOUNT, 0
+	LDI		MODO, 0b00001000						; Probamos "Modo SELECCIONAR MODO FECHA"
+	LDI		MUX_SECUENCIA, 0b00000001				; ¡Un transistor debe empezar encendido!
 	; R5=0
 	LDI		R16, 0
 	MOV		R5, R16	
@@ -221,13 +245,13 @@ SETUP:
 	STS		MINUTOS_UNIDADES, R16
 	STS		MINUTOS_DECENAS, R16
 	;Prueba, je
-	LDI		R16, 0
+	LDI		R16, 3
 	STS		HORAS_UNIDADES, R16
-	LDI		R16, 0
+	LDI		R16, 2
 	STS		HORAS_DECENAS, R16
 	LDI		R16, 1
 	STS		DIAS_UNIDADES, R16						; ¡Días debe empezar en 01!
-	LDI		R16, 0
+	LDI		R16, 3
 	STS		DIAS_DECENAS, R16
 	LDI		R16, 1
 	STS		MESES_UNIDADES, R16						; ¡Meses debe empezar en 01!
@@ -265,6 +289,7 @@ LOOP:
 		;Se cuenta con dos variables de conteo de milisegundos.
 		;Cuando msCOUNT0=250, habrán transcurrido 250 milisegundos; incrementamos msCOUNT1 y reiniciamos msCOUNT0
 		;Cuando msCOUNT1=2, habrán transcurrido 500ms; reiniciamos msCOUNT1, "toggleamos" los dos puntos (PD7)...
+		;sincronizamos "BLINKSTATE" con el estado de PD7 (Por si un parpadeo en los displays es necesario)...
 		;y nos vamos al SEGUNDO PASO
 		;Si msCOUNT0!=250, revisamos msCOUNT1
 		;Si msCOUNT!=2, nos vamos al SEGUNDO PASO
@@ -272,16 +297,32 @@ LOOP:
 		BREQ	REINICIAR_msCOUNT0_E_INCREMENTAR_msCOUNT1
 		REVISAR_msCOUNT1:
 			CPI		msCOUNT1, 2
-			BREQ	REINICIAR_msCOUNT1_Y_TOGGLE
+			BREQ	REINICIAR_msCOUNT1_TOGGLE_Y_SINCRONIZAR_BLINKSTATE
 			RJMP	REVISAR_sCOUNT	
 		REINICIAR_msCOUNT0_E_INCREMENTAR_msCOUNT1:
 			CLR		msCOUNT0
 			INC		msCOUNT1
 			RJMP	REVISAR_msCOUNT1
-		REINICIAR_msCOUNT1_Y_TOGGLE:
+		REINICIAR_msCOUNT1_TOGGLE_Y_SINCRONIZAR_BLINKSTATE:
 			CLR		msCOUNT1
+			;Toggle de dos puntos:
 			SBI		PIND, 7
-			RJMP	REVISAR_sCOUNT	
+			;Sincronizamos BLINKSTATE con los dos puntos:
+			;Si PD7 está encendido, encendemos BLINKSTATE y nos vamos al SEGUNDO PASO
+			;Si PD7 está apagado, apagamos BLINKSTATE y nos vamos al SEGUNDO PASO
+			SBIS	PORTD, 7
+			RJMP	APAGAR_BLINKSTATE
+			RJMP	ENCENDER_BLINKSTATE
+			APAGAR_BLINKSTATE:
+				;Apagamos el bit T en el SREG y lo copiamos en BLINKSTATE
+				CLT
+				BLD		MODO, BLINKSTATE
+				RJMP	REVISAR_sCOUNT
+			ENCENDER_BLINKSTATE:
+				;Encendemos el bit T en el SREG y lo copiamos en BLINKSTATE
+				SET
+				BLD		MODO, BLINKSTATE
+				RJMP	REVISAR_sCOUNT
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
@@ -401,8 +442,8 @@ LOOP:
 			LDI		R16, 1
 			STS		DIAS_UNIDADES, R16
 			LDI		R16, 0
-			STS		DIAS_DECENAS, R16				;¡Días debe empezar en 01!
-			ADIW	Y, 1							;Incrementamos YPointer
+			STS		DIAS_DECENAS, R16				; ¡Días debe empezar en 01!
+			ADIW	Y, 1							; Incrementamos YPointer
 			LDS		R16, MESES_UNIDADES
 			INC		R16
 			CPI		R16, 10
@@ -432,102 +473,113 @@ LOOP:
 		ADD		R16, R0
 		CPI		R16, 13
 		BREQ	REINICIAR_MESES
-		RJMP	DATE_DISPLAY
+		RJMP	REVISAR_MODO
 		REINICIAR_MESES:
 			LDI		R16, 1
 			STS		MESES_UNIDADES, R16
 			LDI		R16, 0
-			STS		MESES_DECENAS, R16				;¡Meses debe empezar en 01!
-			RJMP	DATE_DISPLAY
+			STS		MESES_DECENAS, R16				; ¡Meses debe empezar en 01!
+			RJMP	REVISAR_MODO
 	;***********************************************************************************************************************
 
 	;***********************************************************************************************************************
 	; TERCER PASO: Actualizar valores HEX para displays (Funciones TIME_DISPLAY y DATE_DISPLAY).
 
-	TIME_DISPLAY:
-		;DISPMODE_VALUE debe ser "H", así que ajustamos el XPointer y guardamos
-		LDI		XL, LOW(DISPMODE_H)
-		LDI		XH, HIGH(DISPMODE_H)
-		LD		R16, X
-		STS		DISPMODE_VALUE, R16
-		;Guardamos DISPS 0&1 con los HEX de MINUTOS_UNIDADES y MINUTOS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;MINUTOS_UNIDADES en DISP0:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MINUTOS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP0_VALUE, R16
-		;MINUTOS_DECENAS en DISP1:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MINUTOS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP1_VALUE, R16
-		;Guardamos DISPS 2&3 con los HEX de HORAS_UNIDADES y HORAS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;HORAS_UNIDADES en DISP2:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, HORAS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP2_VALUE, R16
-		;HORAS_DECENAS en DISP3:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, HORAS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP3_VALUE, R16
-		JMP		LOOP
-
-	DATE_DISPLAY:
-		;DISPMODE_VALUE debe ser "F", así que ajustamos el XPointer y guardamos
-		LDI		XL, LOW(DISPMODE_F)
-		LDI		XH, HIGH(DISPMODE_F)
-		LD		R16, X
-		STS		DISPMODE_VALUE, R16
-		;Guardamos DISPS 0&1 con los HEX de MESES_UNIDADES y MESES_DECENAS respectivamente (Ajustamos el ZPointer)
-		;MESES_UNIDADES en DISP0:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MESES_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP0_VALUE, R16
-		;MESES_DECENAS en DISP1:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, MESES_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP1_VALUE, R16
-		;Guardamos DISPS 2&3 con los HEX de DIAS_UNIDADES y DIAS_DECENAS respectivamente (Ajustamos el ZPointer)
-		;DIAS_UNIDADES en DISP2:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, DIAS_UNIDADES
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP2_VALUE, R16
-		;DIAS_DECENAS en DISP3:
-		LDI		ZL, LOW(DISP7SEG << 1)
-		LDI		ZH, HIGH(DISP7SEG << 1)
-		LDS		R16, DIAS_DECENAS
-		ADD		ZL, R16
-		ADC		ZH, R5								;R5=0
-		LPM		R16, Z
-		STS		DISP3_VALUE, R16
-		JMP		LOOP
-
+	REVISAR_MODO:
+		;Primero revisamos el modo en que nos encontramos para verificar qué valores mostrar en los displays.
+		;Si MODO(1,0)=00, mostramos HORA (TIME_DISPLAY)
+		;Si MODO(1,0)=01, mostramos FECHA (DATE_DISPLAY)
+		;Utilizamos un registro de máscara y únicamente verificamos MODO(0,1):
+		LDI		R17, 0b00000011
+		AND		R17, MODO
+		CPI		R17, 0b00000000
+		BREQ	TIME_DISPLAY
+		CPI		R17, 0b00000001
+		BREQ	DATE_DISPLAY
+		TIME_DISPLAY:
+			;DISPMODE_VALUE debe ser "H", así que ajustamos el XPointer y guardamos
+			LDI		XL, LOW(DISPMODE_H)
+			LDI		XH, HIGH(DISPMODE_H)
+			LD		R16, X
+			STS		DISPMODE_VALUE, R16
+			;Guardamos DISPS 0&1 con los HEX de MINUTOS_UNIDADES y MINUTOS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;MINUTOS_UNIDADES en DISP0:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MINUTOS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP0_VALUE, R16
+			;MINUTOS_DECENAS en DISP1:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MINUTOS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP1_VALUE, R16
+			;Guardamos DISPS 2&3 con los HEX de HORAS_UNIDADES y HORAS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;HORAS_UNIDADES en DISP2:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, HORAS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP2_VALUE, R16
+			;HORAS_DECENAS en DISP3:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, HORAS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP3_VALUE, R16
+			;¡Reiniciamos el LOOP!
+			JMP		LOOP
+		DATE_DISPLAY:
+			;DISPMODE_VALUE debe ser "F", así que ajustamos el XPointer y guardamos
+			LDI		XL, LOW(DISPMODE_F)
+			LDI		XH, HIGH(DISPMODE_F)
+			LD		R16, X
+			STS		DISPMODE_VALUE, R16
+			;Guardamos DISPS 0&1 con los HEX de MESES_UNIDADES y MESES_DECENAS respectivamente (Ajustamos el ZPointer)
+			;MESES_UNIDADES en DISP0:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MESES_UNIDADES
+			ADD		ZL, R16 
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP0_VALUE, R16
+			;MESES_DECENAS en DISP1:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, MESES_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP1_VALUE, R16
+			;Guardamos DISPS 2&3 con los HEX de DIAS_UNIDADES y DIAS_DECENAS respectivamente (Ajustamos el ZPointer)
+			;DIAS_UNIDADES en DISP2:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, DIAS_UNIDADES
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP2_VALUE, R16
+			;DIAS_DECENAS en DISP3:
+			LDI		ZL, LOW(DISP7SEG << 1)
+			LDI		ZH, HIGH(DISP7SEG << 1)
+			LDS		R16, DIAS_DECENAS
+			ADD		ZL, R16
+			ADC		ZH, R5							; R5=0
+			LPM		R16, Z
+			STS		DISP3_VALUE, R16
+			;¡Reiniciamos el LOOP!
+			JMP		LOOP
 	;***********************************************************************************************************************
 
 ;***************************************************************************************************************************
@@ -575,104 +627,213 @@ TIM0_INTERRUPT:
 	OUT		TCNT0, R16
 	;Incrementamos el contador de milisegundos
 	INC		msCOUNT0
-	;Rutina para multiplexar displays ("D(n)" se refiere a "Display(n)"):
-	;Si el bit D(n) está apagado, el bit no estaba encendiendo un transistor, entonces no le damos importancia
-	;Por el contrario, si el bit D(n) está encendido, el bit estaba encendiendo un transistor, así que apagamos...
-	;el PIN D(n) y encendemos el PIN D(n+1)
-	SBIC	PORTB, 0
-	RJMP	ENCENDER_D1_Y_APAGAR_D0
-	SBIC	PORTB, 1
-	RJMP	ENCENDER_D2_Y_APAGAR_D1
-	SBIC	PORTB, 2
-	RJMP	ENCENDER_D3_Y_APAGAR_D2
-	SBIC	PORTB, 3
-	RJMP	ENCENDER_D4_Y_APAGAR_D3
-	SBIC	PORTB, 4
-	RJMP	ENCENDER_D0_Y_APAGAR_D4
-	RJMP	TIM0_EXIT
-		ENCENDER_D1_Y_APAGAR_D0:
-			;Primero apagamos D0 (Evitamos "ghosting")
-			SBI		PINB, 0
-			;Cargamos el valor de DISP1 a R16
-			LDS		R16, DISP1_VALUE
-			;Para verificar si se deben encender o apagar los dos puntos, revisamos el estado actual de PORTD
-			;El valor de PD7 varía por el PRIMER PASO del LOOP
-			;Entonces, cargamos PD7 a un registro vacío (R18), y, como los valores HEX guardados SIEMPRE tienen a PD7...
-			;apagado, hacemos un OR entre el valor de DISP1 y el registro con el valor de PD7 (R16 OR R18)
-			IN		R17, PORTD
-			BST		R17, 7
-			LDI		R18, 0
-			BLD		R18, 7
-			OR		R16, R18
-			;Subimos el valor resultante a PORTD
-			OUT		PORTD, R16
-			;Y encendemos D1
-			SBI		PINB, 1
-			RJMP	TIM0_EXIT
-		ENCENDER_D2_Y_APAGAR_D1:
-			;Primero apagamos D1 (Evitamos "ghosting")
-			SBI		PINB, 1
-			;Cargamos el valor de DISP2 a R16
-			LDS		R16, DISP2_VALUE
-			;Verificamos el valor de los dos puntos...
-			IN		R17, PORTD
-			BST		R17, 7
-			LDI		R18, 0
-			BLD		R18, 7
-			OR		R16, R18
-			;Subimos el valor resultante a PORTD
-			OUT		PORTD, R16
-			;Y encendemos D2
-			SBI		PINB, 2
-			RJMP	TIM0_EXIT
-		ENCENDER_D3_Y_APAGAR_D2:
-			;Primero apagamos D2 (Evitamos "ghosting")
-			SBI		PINB, 2
-			;Cargamos el valor de DISP3 a R16
-			LDS		R16, DISP3_VALUE
-			;Verificamos el valor de los dos puntos...
-			IN		R17, PORTD
-			BST		R17, 7
-			LDI		R18, 0
-			BLD		R18, 7
-			OR		R16, R18
-			;Subimos el valor resultante a PORTD
-			OUT		PORTD, R16
-			;Y encendemos D3
-			SBI		PINB, 3
-			RJMP	TIM0_EXIT
-		ENCENDER_D4_Y_APAGAR_D3:
-			;Primero apagamos D3 (Evitamos "ghosting")
-			SBI		PINB, 3
-			;Cargamos el valor de DISPMODE (Ojo) a R16
-			LDS		R16, DISPMODE_VALUE
-			;Verificamos el valor de los dos puntos...
-			IN		R17, PORTD
-			BST		R17, 7
-			LDI		R18, 0
-			BLD		R18, 7
-			OR		R16, R18
-			;Subimos el valor resultante a PORTD
-			OUT		PORTD, R16
-			;Y encendemos D4
-			SBI		PINB, 4
-			RJMP	TIM0_EXIT
-		ENCENDER_D0_Y_APAGAR_D4:
-			;Primero apagamos D4 (Evitamos "ghosting")
-			SBI		PINB, 4
-			;Cargamos el valor de DISP0 a R16
-			LDS		R16, DISP0_VALUE
-			;Verificamos el valor de los dos puntos...
-			IN		R17, PORTD
-			BST		R17, 7
-			LDI		R18, 0
-			BLD		R18, 7
-			OR		R16, R18
-			;Subimos el valor resultante a PORTD
-			OUT		PORTD, R16
-			;Y encendemos D0
-			SBI		PINB, 0
-			RJMP	TIM0_EXIT
+	;Revisamos MODO(SETUP_) y MODO(MODE_SELECT) para ver si existe algún parpadeo:
+	;Si MODO(MODE_SELECT)=1, debe parpadear DISPMODE
+	;Si MODO(SETUP_)=1, deben parpadear DISPS0,1,2,3
+	;Si ninguno está encendido, realizamos una multiplexación normal
+	SBRC	MODO, MODE_SELECT
+	RJMP	PARPADEO_EN_DISPMODE
+	SBRC	MODO, SETUP_
+	RJMP	PARPADEO_EN_DISPS_GENERALES
+	RJMP	MUX_NORMAL
+	MUX_NORMAL:
+		;Rutina para multiplexar displays..."D(n)" se refiere a "Display(n)":
+		;Nos guiamos con, y actualizamos "MUX_SECUENCIA"
+		;Si el bit D(n) en MUX_SECUENCIA está apagado, el bit no estaba encendiendo un transistor, entonces...
+		;no le damos importancia
+		;Por el contrario, si el bit D(n) en MUX_SECUENCIA está encendido, el bit estaba encendiendo un...
+		;transistor, así que apagamos el PIN D(n) y encendemos el PIN D(n+1)
+		;En cada apagado y/o encendido, actualizamos "MUX_SECUENCIA" para que, en caso de un posible próximo parpadeo...
+		;sepamos cómo iba la secuencia.
+		SBRC	MUX_SECUENCIA, 0
+		RJMP	ENCENDER_D1_Y_APAGAR_D0
+		SBRC	MUX_SECUENCIA, 1
+		RJMP	ENCENDER_D2_Y_APAGAR_D1
+		SBRC	MUX_SECUENCIA, 2
+		RJMP	ENCENDER_D3_Y_APAGAR_D2
+		SBRC	MUX_SECUENCIA, 3
+		RJMP	ENCENDER_D4_Y_APAGAR_D3
+		SBRC	MUX_SECUENCIA, 4
+		RJMP	ENCENDER_D0_Y_APAGAR_D4
+		RJMP	TIM0_EXIT
+			ENCENDER_D1_Y_APAGAR_D0:
+				;Primero apagamos D0 (Evitamos "ghosting")
+				CBI		PORTB, 0
+				;Cargamos el valor de DISP1 a R16
+				LDS		R16, DISP1_VALUE
+				;Para verificar si se deben encender o apagar los dos puntos, revisamos el estado actual de PORTD
+				;El valor de PD7 varía por el PRIMER PASO del LOOP
+				;Entonces, cargamos PD7 a un registro vacío (R18), y, como los valores HEX guardados SIEMPRE tienen a PD7...
+				;apagado, hacemos un OR entre el valor de DISP1 y el registro con el valor de PD7 (R16 OR R18)
+				IN		R17, PORTD
+				BST		R17, 7
+				LDI		R18, 0
+				BLD		R18, 7
+				OR		R16, R18
+				;Subimos el valor resultante a PORTD
+				OUT		PORTD, R16
+				;Encendemos D1
+				SBI		PORTB, 1
+				;Y actualizamos MUX_SECUENCIA
+				LDI		MUX_SECUENCIA, 0b00000010
+				RJMP	TIM0_EXIT
+			ENCENDER_D2_Y_APAGAR_D1:
+				;Primero apagamos D1 (Evitamos "ghosting")
+				CBI		PORTB, 1
+				;Cargamos el valor de DISP2 a R16
+				LDS		R16, DISP2_VALUE
+				;Verificamos el valor de los dos puntos...
+				IN		R17, PORTD
+				BST		R17, 7
+				LDI		R18, 0
+				BLD		R18, 7
+				OR		R16, R18
+				;Subimos el valor resultante a PORTD
+				OUT		PORTD, R16
+				;Encendemos D2
+				SBI		PORTB, 2
+				;Y actualizamos MUX_SECUENCIA
+				LDI		MUX_SECUENCIA, 0b00000100
+				RJMP	TIM0_EXIT
+			ENCENDER_D3_Y_APAGAR_D2:
+				;Primero apagamos D2 (Evitamos "ghosting")
+				CBI		PORTB, 2
+				;Cargamos el valor de DISP3 a R16
+				LDS		R16, DISP3_VALUE
+				;Verificamos el valor de los dos puntos...
+				IN		R17, PORTD
+				BST		R17, 7
+				LDI		R18, 0
+				BLD		R18, 7
+				OR		R16, R18
+				;Subimos el valor resultante a PORTD
+				OUT		PORTD, R16
+				;Encendemos D3
+				SBI		PORTB, 3
+				;Y actualizamos MUX_SECUENCIA
+				LDI		MUX_SECUENCIA, 0b00001000
+				RJMP	TIM0_EXIT
+			ENCENDER_D4_Y_APAGAR_D3:
+				;Primero apagamos D3 (Evitamos "ghosting")
+				CBI		PORTB, 3
+				;Cargamos el valor de DISPMODE (Ojo) a R16
+				LDS		R16, DISPMODE_VALUE
+				;Verificamos el valor de los dos puntos...
+				IN		R17, PORTD
+				BST		R17, 7
+				LDI		R18, 0
+				BLD		R18, 7
+				OR		R16, R18
+				;Subimos el valor resultante a PORTD
+				OUT		PORTD, R16
+				;Encendemos D4
+				SBI		PORTB, 4
+				;Y actualizamos MUX_SECUENCIA
+				LDI		MUX_SECUENCIA, 0b00010000
+				RJMP	TIM0_EXIT
+			ENCENDER_D0_Y_APAGAR_D4:
+				;Primero apagamos D4 (Evitamos "ghosting")
+				CBI		PORTB, 4
+				;Cargamos el valor de DISP0 a R16
+				LDS		R16, DISP0_VALUE
+				;Verificamos el valor de los dos puntos...
+				IN		R17, PORTD
+				BST		R17, 7
+				LDI		R18, 0
+				BLD		R18, 7
+				OR		R16, R18
+				;Subimos el valor resultante a PORTD
+				OUT		PORTD, R16
+				;Encendemos D0
+				SBI		PORTB, 0
+				;Y actualizamos MUX_SECUENCIA
+				LDI		MUX_SECUENCIA, 0b00000001
+				RJMP	TIM0_EXIT
+	PARPADEO_EN_DISPMODE:
+		;Revisamos si BLINKSTATE=1. Si sí, realizamos la rutina convencional de muxeo "MUX_NORMAL". Si no...
+		;únicamente revisamos DISPS1,2,3, y dejamos apagado DISPMODE... ¡PERO ACTUALIZAMOS MUX_SECUENCIA!
+		;Nos guiamos con, y actualizamos "MUX_SECUENCIA"
+		SBRC	MODO, BLINKSTATE
+		RJMP	MUX_NORMAL
+		;Si BLINKSTATE=0...
+		;Disps0,1,2,3 mantienen las mismas rutinas que MUX_NORMAL
+		;Pero creamos una nueva para DISPMODE
+		SBRC	MUX_SECUENCIA, 0
+		RJMP	ENCENDER_D1_Y_APAGAR_D0
+		SBRC	MUX_SECUENCIA, 1
+		RJMP	ENCENDER_D2_Y_APAGAR_D1
+		SBRC	MUX_SECUENCIA, 2
+		RJMP	ENCENDER_D3_Y_APAGAR_D2
+		SBRC	MUX_SECUENCIA, 3
+		RJMP	APAGAR_D4_Y_APAGAR_D3
+		SBRC	MUX_SECUENCIA, 4
+		RJMP	ENCENDER_D0_Y_APAGAR_D4
+		RJMP	TIM0_EXIT
+			APAGAR_D4_Y_APAGAR_D3:
+				;Como sabemos que el parpadeo de los dos puntos y el de los displays va en sincronía...
+				;¡Solo subimos "0" a PORTD y PORTB!
+				;PERO actualizamos MUX_SECUENCIA
+				LDI		R16, 0
+				OUT		PORTD, R16
+				OUT		PORTB, R16
+				LDI		MUX_SECUENCIA, 0b00010000
+				RJMP	TIM0_EXIT
+	PARPADEO_EN_DISPS_GENERALES:
+		;Revisamos si BLINKSTATE=1. Si sí, realizamos la rutina convencional de muxeo "MUX_NORMAL". Si no...
+		;únicamente revisamos DISPMODE, y dejamos apagados DISPS0,1,2,3... ¡PERO ACTUALIZAMOS MUX_SECUENCIA!
+		;Nos guiamos con, y actualizamos "MUX_SECUENCIA"
+		SBRC	MODO, BLINKSTATE
+		RJMP	MUX_NORMAL
+		;Si BLINKSTATE=0...
+		;DISPMODE mantiene las misma rutina que MUX_NORMAL
+		;Pero creamos unas nuevas para DISPS0,1,2,3
+		SBRC	MUX_SECUENCIA, 0
+		RJMP	APAGAR_D1_Y_APAGAR_D0
+		SBRC	MUX_SECUENCIA, 1
+		RJMP	APAGAR_D2_Y_APAGAR_D1
+		SBRC	MUX_SECUENCIA, 2
+		RJMP	APAGAR_D3_Y_APAGAR_D2
+		SBRC	MUX_SECUENCIA, 3
+		RJMP	ENCENDER_D4_Y_APAGAR_D3
+		SBRC	MUX_SECUENCIA, 4
+		RJMP	APAGAR_D0_Y_APAGAR_D4
+		RJMP	TIM0_EXIT
+			APAGAR_D1_Y_APAGAR_D0:
+				;Como sabemos que el parpadeo de los dos puntos y el de los displays va en sincronía...
+				;¡Solo subimos "0" a PORTD y PORTB!
+				;PERO actualizamos MUX_SECUENCIA
+				LDI		R16, 0
+				OUT		PORTD, R16
+				OUT		PORTB, R16
+				LDI		MUX_SECUENCIA, 0b00000010
+				RJMP	TIM0_EXIT
+			APAGAR_D2_Y_APAGAR_D1:
+				;Como sabemos que el parpadeo de los dos puntos y el de los displays va en sincronía...
+				;¡Solo subimos "0" a PORTD y PORTB!
+				;PERO actualizamos MUX_SECUENCIA
+				LDI		R16, 0
+				OUT		PORTD, R16
+				OUT		PORTB, R16
+				LDI		MUX_SECUENCIA, 0b00000100
+				RJMP	TIM0_EXIT
+			APAGAR_D3_Y_APAGAR_D2:
+				;Como sabemos que el parpadeo de los dos puntos y el de los displays va en sincronía...
+				;¡Solo subimos "0" a PORTD y PORTB!
+				;PERO actualizamos MUX_SECUENCIA
+				LDI		R16, 0
+				OUT		PORTD, R16
+				OUT		PORTB, R16
+				LDI		MUX_SECUENCIA, 0b00001000
+				RJMP	TIM0_EXIT
+			APAGAR_D0_Y_APAGAR_D4:
+				;Como sabemos que el parpadeo de los dos puntos y el de los displays va en sincronía...
+				;¡Solo subimos "0" a PORTD y PORTB!
+				;PERO actualizamos MUX_SECUENCIA
+				LDI		R16, 0
+				OUT		PORTD, R16
+				OUT		PORTB, R16
+				LDI		MUX_SECUENCIA, 0b00000001
+				RJMP	TIM0_EXIT
 	TIM0_EXIT:
 		;Rehabilitamos PCIE
 		LDI		R16, (1 << PCIE1)

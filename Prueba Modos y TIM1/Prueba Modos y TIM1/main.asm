@@ -8,8 +8,32 @@
 ;Este código busca multiplexar los displays cada segundo con el TIM1.
 ;Ahora, haremos que haya una cuenta únicamente de segundos. Se multiplexará con TIM0.
 
+;Comienza el uso de un registro de banderas nombrado MODO. Su CÓDIGO es el siguiente:
+; {000, BLINKSTATE, SETUP, MODE_SELECT, MODO1, MODO0}.
+
+; "MODO" indica si se debe MOSTRAR "Hora", "Fecha" o "Alarma"; sea en modo normal o en configuración.
+; "00" es "Hora", "01" es "Fecha", y "10" es Alarma".
+
+; "SETUP" indica si se busca configurar algún modo de los mencionados arriba.
+
+; "MODE_SELECT" indica si se busca cambiar de modo.
+
+; "MODE_SELECT" y "SETUP" no pueden estar encendidos a la vez. Por lo mismo, existirá programación...
+; defensiva.
+
+; "BLINKSTATE" indica en qué estado deben estar los DISPS en su posible parpadeo para que sea interpretado por la multiplexación
+; en la interrupción de TIM0
+
 
 .include "M328PDEF.inc"
+
+; Bits de registro MODO
+.equ			SETUP_BLINKSTATE	= 5
+.equ			SELECT_BLINKSTATE	= 4
+.equ			SETUP				= 3
+.equ			MODE_SELECT			= 2
+.equ			MODO1				= 1
+.equ			MODO0				= 0
 
 ; Valores de Timers
 .equ			T1VALUE_L			= 0xDC
@@ -41,7 +65,8 @@
 		.DB	0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x67, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71
 
 ;Registros de propósito general
-.def			SECSCOUNT			= R22 	
+.def			SECSCOUNT			= R22
+.def			MODO				= R23 	
 
 ; Inicio del código
 SETUP:
@@ -97,10 +122,11 @@ SETUP:
 	STS		TCNT1L, R16
 
 	;Valores iniciales de displays
+	LDI		R16, 0x76
+	STS		DISPMODE_VALUE, R16
 	LDI		ZL, LOW(DISP7SEG << 1)
 	LDI		ZH, HIGH(DISP7SEG << 1)
 	LPM		R16, Z
-	STS		DISPMODE_VALUE, R16
 	STS		DISP0_VALUE, R16
 	STS		DISP1_VALUE, R16
 	STS		DISP2_VALUE, R16
@@ -111,6 +137,9 @@ SETUP:
 	STS		SECSTENSCOUNT, R16
 	STS		SECSHUNDSCOUNT, R16
 
+	;Otros valores iniciales
+	LDI		MODO, 0
+
 	;R0=0
 	LDI		R16, 0
 	MOV		R0, R16
@@ -118,7 +147,48 @@ SETUP:
 	SEI
 
 LOOP:
+	;*************************************************************************************************************
+	; PRIMER PASO: Actualizar variables de conteo para parpadeo.
 
+	REVISAR_PARPADEO:
+		;Se cuenta con dos variables de conteo de milisegundos.
+		;Cuando msCOUNT0=250, habrán transcurrido 250 milisegundos; incrementamos msCOUNT1 y reiniciamos msCOUNT0
+		;Cuando msCOUNT1=2, habrán transcurrido 500ms; reiniciamos msCOUNT1, "toggleamos" los dos puntos (PD7), ... 
+		;"sincropnizamos" BLINKSTATE con el estado de PD7 (Por si un parpadeo es activado)...
+		;y nos vamos al SEGUNDO PASO
+		;Si msCOUNT0!=250, revisamos msCOUNT1
+		;Si msCOUNT!=2, nos vamos al SEGUNDO PASO
+		CPI		msCOUNT0, 250
+		BREQ	REINICIAR_msCOUNT0_E_INCREMENTAR_msCOUNT1
+		REVISAR_msCOUNT1:
+			CPI		msCOUNT1, 2
+			BREQ	REINICIAR_msCOUNT1_TOGGLE_DOS_PUNTOS_Y_REVISAR_MODO
+			RJMP	REVISAR_sCOUNT	
+		REINICIAR_msCOUNT0_E_INCREMENTAR_msCOUNT1:
+			CLR		msCOUNT0
+			INC		msCOUNT1
+			RJMP	REVISAR_msCOUNT1
+		REINICIAR_msCOUNT1_TOGGLE_DOS_PUNTOS_Y_BLINKSTATE:
+			CLR		msCOUNT1
+			;Toggle de dos puntos
+			SBI		PIND, 7
+			;Sincronizamos BLINKSTATE con los dos puntos:
+			;Si PD7 está encendido, encendemos BLINKSTATE
+			;Si PD7 está apagado, apagamos BLINKSTATE
+			SBIS	PORTD, 7
+			RJMP	APAGAR_BLINKSTATE
+			RJMP	ENCENDER_BLINKSTATE
+			APAGAR_BLINKSTATE:
+				CLT
+				BLD		MODO, BLINKSTATE
+				RJMP	REVISAR_sCOUNT
+			ENCENDER_BLINKSTATE:
+				SET
+				BLD		MODO, BLINKSTATE
+				RJMP	REVISAR_sCOUNT
+	;*************************************************************************************************************
+	
+	
 	;*************************************************************************************************************
 	;Rutina para actualizar contadores
 
