@@ -235,7 +235,7 @@ SETUP:
 	LDI		msCOUNT0, 0
 	LDI		msCOUNT1, 0
 	LDI		sCOUNT, 0
-	LDI		MODO, 0b00001000						; Probamos "Modo SELECCIONAR MODO FECHA"
+	LDI		MODO, 0b00001000						; Probamos "Modo CONFIGURAR HORA"
 	LDI		MUX_SECUENCIA, 0b00000001				; ¡Un transistor debe empezar encendido!
 	; R5=0
 	LDI		R16, 0
