@@ -16,7 +16,7 @@
 ; --> Cada display tendrá una localidad en RAM para guardar su valor HEX que tiene que "sacar" PORTD.
 
 ; --> Se utilizará un registro de propósito general nombrado "MODO" cuya función será guardar "flags" varias.
-; --> Su CÓDIFICACIÓN es la siguiente: {000, BLINKSTATE, SETUP_, MODE_SELECT, MODO1, MODO0}
+; --> Su CÓDIFICACIÓN es la siguiente: {00,SETUP_VALUE, BLINKSTATE, SETUP_, MODE_SELECT, MODO1, MODO0}
 ; --> "MODOn" indica si se debe MOSTRAR "Hora", "Fecha" o "Alarma"; sea en modo normal o en configuración.
 ;     "00" es "Hora", "01" es "Fecha", y "10" es Alarma".
 ; --> "SETUP_" indica si se busca configurar algún modo de los mencionados arriba. Ello supone un parpadeo en DISPS0,1,2,3.
@@ -24,8 +24,9 @@
 ; --> "MODE_SELECT" y "SETUP_" no pueden estar encendidos a la vez. Ello se detallará con la interfaz del usuario.
 ; --> "BLINKSTATE" indica en qué estado deben estar los DISPS en su posible parpadeo para que sea interpretado por...
 ;     la multiplexación en la interrupción de TIM0. Los displays deben parpadear acorde a los dos puntos.
+; --> De "SETUP_VALUE" se hablará más en profundidad en la explicación de interfaz de usuario.
 
-; --> Se utilizará un registro de propósito general para guardar el órden de mulltiplexación de Displays en caso de...
+; --> Se utilizará un registro de propósito general para guardar el órden de multiplexación de Displays en caso de...
 ;     existir parpadeo. Ello para evitar "ghosting" o pérdida de secuencia.
 
 ; --> Se utilizarán interrupciones de PINCHANGE en PORTC para la interfaz del usuario.
@@ -65,6 +66,9 @@
 ;     configurar el valor a la derecha de los dos puntos, y comenzar a variar el valor A LA IZQUIERDA de los dos puntos.
 ;     Si se vuelve a presionar el botón de la perilla, se variará el valor a la derecha de los dos puntos, y así...
 ;     sucesivamente.
+;     Entonces, para saber qué valor variar, se hará uso del bit SETUP_VALUE en el registro MODO. Si SETUP_VALUE=0, se...
+;     cambiarán los valores a la derecha, y si SETUP_VALUE=1, se cambiarán los valores a la izquierda.
+;	  SETUP_VALUE solo tendra validez si la flag SETUP_ en MODO está encendida.
 
 ; --> Para salir de CONFIGURACIÓN, se debe tornar a 0 el SPDT, indicando que se terminó de configurar el reloj.
 
@@ -74,9 +78,15 @@
 
 ; --> Aspectos importantes sobre PINCHANGE_INTERRUPT:
 
-; --> Se utilizará un registro de propósito general nombrado "DIRECCION_DE_CAMBIO" que guardará si se debe INCREMENTAR o...
+; --> Se utilizará un registro de propósito general nombrado "ENCODER" que guardará si se debe INCREMENTAR o...
 ;     DECREMENTAR algún valor dada la acción de la perilla. Esta acción de cambio únicamente tendrá efecto si alguna...
-;     bandera SETUP_ o MODE_SELECT en MODO se encuentra encendida.
+;     bandera SETUP_ o MODE_SELECT en MODO se encuentra encendida. La "DIRECCION" de cambio se guardará constantemente...
+;	  en el bit 0 del registro. Si DIRECCION=0, se desea decrementar algún valor; si DIRECCION=1, se desea incrementar...
+;     dicho valor.
+
+; --> El bit 1 del registro será nombrado "CAMBIO", y se interpretará como una "flag" indicativa para verificar si SÍ se...
+;     desea realizar un cambio o no. Esta flag sería encendida en la rutina de interrupción si se activa la perilla, y,...
+;     para evitar un cambio constante, luego la flag sería apagada cuando se interprete el cambio en el LOOP.
 
 ; --> 
 
@@ -102,6 +112,10 @@
 .equ			MODE_SELECT			= 2
 .equ			MODO1				= 1
 .equ			MODO0				= 0
+
+; Bits característicos del registro "ENCODER":
+.equ			CAMBIO				= 1
+.equ			DIRECCION			= 0
 ;***************************************************************************************************************************
 
 ;***************************************************************************************************************************
@@ -161,7 +175,7 @@
 .def			sCOUNT					= R22 
 .def			MODO					= R23
 .def			MUX_SECUENCIA			= R24
-.def			DIRECCION_DE_CAMBIO		= R25
+.def			ENCODER					= R25
 ;***************************************************************************************************************************
 
 
@@ -295,6 +309,7 @@ SETUP:
 	LDI		sCOUNT, 0
 	LDI		MODO, 0b00001000						; Probamos "Modo CONFIGURAR HORA"
 	LDI		MUX_SECUENCIA, 0b00000001				; ¡Un transistor debe empezar encendido!
+	LDI		ENCODER, 0
 	; R5=0
 	LDI		R16, 0
 	MOV		R5, R16	
@@ -546,8 +561,20 @@ LOOP:
 	REVISAR_CONFIGURACION:
 		;Primero revisamos si SÍ se quiere configurar algo. Para ello, verificamos las "flags" SETUP_ y MODE_SELECT en...
 		;el registro MODO.
-		;Si sí hay algo qué configurar, revisamos el registro DIRECCION_DE_CAMBIO para verificar si hay que INCREMENTAR...
-		;DECREMENTAR. Si no se debe configurar algo, NO REVISAMOS el registro mencionado.
+		;Si sí hay algo qué configurar, revisamos el registro ENCODER para verificar si hay que INCREMENTAR...
+		;o DECREMENTAR. Si no se debe configurar algo, NO REVISAMOS el registro mencionado.
+		;Si no se quiere configurar nada, saltamos al CUARTO PASO.
+		;Por lo tanto, creamos una máscara para MODO:
+		LDI		R16, (1 << SETUP_) | (1 << MODE_SELECT) | (1 << MODO1) | (1 << MODO0)
+		AND		R16, MODO
+		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=00, se desea CONFIGURAR MINUTOS DEL MODO HORA (DISPS0,1).
+		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=00, se desea CONFIGURAR HORAS DEL MODO HORA (DISPS2,3).
+		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=01, se desea CONFIGURAR MINUTOS DEL MODO HORA (DISPS0,1).
+		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=00, se desea CONFIGURAR HORAS DEL MODO HORA (DISPS2,3).
+		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=10, se desea CONFIGURAR MINUTOS DEL MODO ALARMA (DISPS0,1).
+		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=10, se desea CONFIGURAR HORAS DEL MODO ALARMA (DISPS2,3).
+		;Si MODE_SELECT=1 y MODO1,0=00, se desea CAMBIAR MODO EN MODO HORA. Se configura el valor de DISPMODE.
+		;Si MODE_SELECT=1 y MODO1,0=01, se desea CAMBIAR MODO EN MODO FECHA. Se configura el valor de DISPMODE.
 
 	;***********************************************************************************************************************
 
