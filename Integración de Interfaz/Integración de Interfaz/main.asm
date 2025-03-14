@@ -412,20 +412,8 @@ LOOP:
 			;Revisamos si al incrementar MINUTOS_UNIDADES, este llega 10 para reiniciarlo y aumentar MINUTOS_DECENAS
 			;Si no, solo incrementamos MINUTOS_UNIDADES y nos vamos a revisar el conteo de minutos
 			CLR		sCOUNT
-			LDS		R16, MINUTOS_UNIDADES
-			INC		R16
-			CPI		R16, 10
-			BREQ	REINICIAR_MINUTOS_UNIDADES_E_INCREMENTAR_MINUTOS_DECENAS
-			;Si MINUTOS_UNIDADES!=10, solo lo guardamos...
-			STS		MINUTOS_UNIDADES, R16
+			CALL	INCREMENTAR_MINUTOS
 			RJMP	REVISAR_MINUTOS
-			REINICIAR_MINUTOS_UNIDADES_E_INCREMENTAR_MINUTOS_DECENAS:
-				LDI		R16, 0
-				STS		MINUTOS_UNIDADES, R16
-				LDS		R16, MINUTOS_DECENAS
-				INC		R16
-				STS		MINUTOS_DECENAS, R16
-				RJMP	REVISAR_MINUTOS
 
 	REVISAR_MINUTOS:
 		;Si MINUTOS_DECENAS=6, habrá transcurrido una hora; reiniciamos MINUTOS, incrementamos HORAS...
@@ -441,20 +429,8 @@ LOOP:
 			LDI		R16, 0
 			STS		MINUTOS_UNIDADES, R16
 			STS		MINUTOS_DECENAS, R16
-			LDS		R16, HORAS_UNIDADES
-			INC		R16
-			CPI		R16, 10
-			BREQ	REINICIAR_HORAS_UNIDADES_E_INCREMENTAR_HORAS_DECENAS
-			;Si HORAS_UNIDADES!=10, solo lo guardamos...
-			STS		HORAS_UNIDADES, R16
+			CALL	INCREMENTAR_HORAS
 			RJMP	REVISAR_HORAS
-			REINICIAR_HORAS_UNIDADES_E_INCREMENTAR_HORAS_DECENAS:	
-				LDI		R16, 0
-				STS		HORAS_UNIDADES, R16
-				LDS		R16, HORAS_DECENAS
-				INC		R16
-				STS		HORAS_DECENAS, R16
-				RJMP	REVISAR_HORAS
 
 	REVISAR_HORAS:
 		;Si HORAS=24, habrá transcurrido un día; reiniciamos HORAS, incrementamos DIAS...
@@ -477,20 +453,8 @@ LOOP:
 			LDI		R16, 0
 			STS		HORAS_UNIDADES, R16
 			STS		HORAS_DECENAS, R16
-			LDS		R16, DIAS_UNIDADES
-			INC		R16
-			CPI		R16, 10
-			BREQ	REINICIAR_DIAS_UNIDADES_E_INCREMENTAR_DIAS_DECENAS
-			;Si DIAS_UNIDADES!=10, solo lo guardamos...
-			STS		DIAS_UNIDADES, R16
+			CALL	INCREMENTAR_DIAS
 			RJMP	REVISAR_DIAS
-			REINICIAR_DIAS_UNIDADES_E_INCREMENTAR_DIAS_DECENAS:
-				LDI		R16, 0
-				STS		DIAS_UNIDADES, R16
-				LDS		R16, DIAS_DECENAS
-				INC		R16
-				STS		DIAS_DECENAS, R16
-				RJMP	REVISAR_DIAS
 
 	REVISAR_DIAS:
 		;Si DIAS=DIAS_DEL_MES, habrá transcurrido el mes; reiniciamos DIAS (Al valor "01"), incrementamos MESES...
@@ -564,17 +528,78 @@ LOOP:
 		;Si sí hay algo qué configurar, revisamos el registro ENCODER para verificar si hay que INCREMENTAR...
 		;o DECREMENTAR. Si no se debe configurar algo, NO REVISAMOS el registro mencionado.
 		;Si no se quiere configurar nada, saltamos al CUARTO PASO.
-		;Por lo tanto, creamos una máscara para MODO:
-		LDI		R16, (1 << SETUP_) | (1 << MODE_SELECT) | (1 << MODO1) | (1 << MODO0)
+		;Creamos una PRIMERA máscara para MODO (Aquí nos importa SETUP_VALUE y SETUP_):
+		LDI		R16, (1 << SETUP_VALUE) | (1 << SETUP_) | (1 << MODO1) | (1 << MODO0)
 		AND		R16, MODO
-		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=00, se desea CONFIGURAR MINUTOS DEL MODO HORA (DISPS0,1).
-		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=00, se desea CONFIGURAR HORAS DEL MODO HORA (DISPS2,3).
-		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=01, se desea CONFIGURAR MINUTOS DEL MODO HORA (DISPS0,1).
-		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=00, se desea CONFIGURAR HORAS DEL MODO HORA (DISPS2,3).
+		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=00, se desea CONFIGURAR MINUTOS DE TIME_DISPLAY (DISPS0,1).
+		CPI		R16, (0 << SETUP_VALUE) | (1 << SETUP_) | (0 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_MINUTOS_DE_TIME_DISPLAY
+		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=00, se desea CONFIGURAR HORAS DE TIME_DISPLAY (DISPS2,3).
+		CPI		R16, (1 << SETUP_VALUE) | (1 << SETUP_) | (0 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_HORAS_DE_TIME_DISPLAY
+		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=01, se desea CONFIGURAR MES DE DATE_DISPLAY (DISPS0,1).
+		CPI		R16, (0 << SETUP_VALUE) | (1 << SETUP_) | (0 << MODO1) | (1 << MODO0)
+		BREQ	CONFIGURAR_MES_DE_DATE_DISPLAY
+		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=01, se desea CONFIGURAR DIAS DE DATE_DISPLAY (DISPS2,3).
+		CPI		R16, (1 << SETUP_VALUE) | (1 << SETUP_) | (0 << MODO1) | (1 << MODO0)
+		BREQ	CONFIGURAR_DIAS_DE_DATE_DISPLAY
 		;Si SETUP_=1, SETUP_VALUE=0 y MODO1,0=10, se desea CONFIGURAR MINUTOS DEL MODO ALARMA (DISPS0,1).
+		CPI		R16, (0 << SETUP_VALUE) | (1 << SETUP_) | (1 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_MINUTOS_DE_ALARM_DISPLAY
 		;Si SETUP_=1, SETUP_VALUE=1 y MODO1,0=10, se desea CONFIGURAR HORAS DEL MODO ALARMA (DISPS2,3).
-		;Si MODE_SELECT=1 y MODO1,0=00, se desea CAMBIAR MODO EN MODO HORA. Se configura el valor de DISPMODE.
-		;Si MODE_SELECT=1 y MODO1,0=01, se desea CAMBIAR MODO EN MODO FECHA. Se configura el valor de DISPMODE.
+		CPI		R16, (1 << SETUP_VALUE) | (1 << SETUP_) | (1 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_HORAS_DE_ALARM_DISPLAY
+		;Creamos una SEGUNDA máscara para MODO (Aquí nos importa MODE_SELECT):
+		LDI		R16, (1 << MODE_SELECT) | (1 << MODO1) | (1 << MODO0)
+		AND		R16, MODO
+		;Si MODE_SELECT=1 y MODO1,0=00, se desea CAMBIAR MODO EN TIME_DISPLAY. Se configura el valor de DISPMODE.
+		CPI		R16, (1 << MODE_SELECT) | (0 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_MODO_EN_TIME_DISPLAY
+		;Si MODE_SELECT=1 y MODO1,0=01, se desea CAMBIAR MODO EN DATE_DISPLAY. Se configura el valor de DISPMODE.
+		CPI		R16, (1 << MODE_SELECT) | (0 << MODO1) | (1 << MODO0)
+		BREQ	CONFIGURAR_MODO_EN_DATE_DISPLAY
+		;Si MODE_SELECT=1 y MODO1,0=10, se desea CAMBIAR MODO EN ALARM_DISPLAY. Se configura el valor de DISPMODE.
+		CPI		R16, (1 << MODE_SELECT) | (1 << MODO1) | (0 << MODO0)
+		BREQ	CONFIGURAR_MODO_EN_ALARM_DISPLAY
+		;Si no se quiere configurar nada, saltamos al CUARTO PASO
+		RJMP	REVISAR_MODO
+
+		;Para cada sub-rutina siguiente, se revisará si se debe hacer un cambio en el valor asociado. Ello...
+		;revisando CAMBIO en el registro ENCODER. Si CAMBIO=1, SÍ se desea hacer un cambio. Entonces, revisamos...
+		;DIRECCION para saber si debemos incrementar o decrementar. Y, antes de dejar la rutina y saltar al...
+		;CUARTO PASO, APAGAMOS CAMBIO para expresar que el cambio requerido ya fue interpretado y ejecutado.
+		CONFIGURAR_MINUTOS_DE_TIME_DISPLAY:
+			;Si CAMBIO=0, saltamos al CUARTO PASO
+			SBRS	ENCODER, CAMBIO
+			RJMP	REVISAR_MODO
+			;Si CAMBIO=1, revisamos si debemos incrementar o decrementar MINUTOS
+			;Si DIRECCION=1, incrementamos MINUTOS
+			;Si no, decrementamos MINUTOS
+			SBRS	ENCODER, DIRECCION
+			RJMP	DECREMENTAR_MINUTOS_EN_TIME_DISPLAY
+			RJMP	INCREMENTAR_MINUTOS_EN_TIME_DISPLAY
+			INCREMENTAR_MINUTOS_EN_TIME_DISPLAY:
+				
+			DECREMENTAR_MINUTOS_EN_TIME_DISPLAY:
+
+
+		CONFIGURAR_HORAS_DE_TIME_DISPLAY:
+
+		CONFIGURAR_MES_DE_DATE_DISPLAY:
+
+		CONFIGURAR_DIAS_DE_DATE_DISPLAY:
+
+		CONFIGURAR_DIAS_DE_DATE_DISPLAY:
+
+		CONFIGURAR_MINUTOS_DE_ALARM_DISPLAY:
+
+		CONFIGURAR_HORAS_DE_ALARM_DISPLAY:
+
+		CONFIGURAR_MODO_EN_TIME_DISPLAY:
+
+		CONFIGURAR_MODO_EN_DATE_DISPLAY:
+
+		CONFIGURAR_MODO_EN_ALARM_DISPLAY:
 
 	;***********************************************************************************************************************
 
@@ -678,6 +703,74 @@ LOOP:
 			JMP		LOOP
 	;***********************************************************************************************************************
 
+;***************************************************************************************************************************
+
+
+;***************************************************************************************************************************
+; ¡Rutinas NO de interrupción!
+
+INCREMENTAR_MINUTOS:
+	;¡Teniendo cuidado de reiniciar MINUTOS_UNIDADES e incrementar MINUTOS_DECENAS de ser necesario!
+	;Si MINUTOS_DECENAS=6, depende del paso en que nos encontremos el determinar qué hacer con ello
+	LDS		R16, MINUTOS_UNIDADES
+	INC		R16
+	CPI		R16, 10
+	BREQ	REINICIAR_MINUTOS_UNIDADES_E_INCREMENTAR_MINUTOS_DECENAS
+	;Si MINUTOS_UNIDADES!=10, solo lo guardamos...
+	STS		MINUTOS_UNIDADES, R16
+	RJMP	SALIR_DE_INCREMENTAR_MINUTOS
+	REINICIAR_MINUTOS_UNIDADES_E_INCREMENTAR_MINUTOS_DECENAS:
+		LDI		R16, 0
+		STS		MINUTOS_UNIDADES, R16
+		LDS		R16, MINUTOS_DECENAS
+		INC		R16
+		STS		MINUTOS_DECENAS, R16
+		RJMP	SALIR_DE_INCREMENTAR_MINUTOS
+	SALIR_DE_INCREMENTAR_MINUTOS:
+		RET
+
+INCREMENTAR_HORAS:
+	;¡Teniendo cuidado de reiniciar HORAS_UNIDADES e incrementar HORAS_DECENAS de ser necesario!
+	;Si HORAS=24, depende del paso en que nos encontremos el determinar qué hacer con ello
+	LDS		R16, HORAS_UNIDADES
+	INC		R16
+	CPI		R16, 10
+	BREQ	REINICIAR_HORAS_UNIDADES_E_INCREMENTAR_HORAS_DECENAS
+	;Si HORAS_UNIDADES!=10, solo lo guardamos...
+	STS		HORAS_UNIDADES, R16
+	RJMP	SALIR_DE_INCREMENTAR_HORAS
+	REINICIAR_HORAS_UNIDADES_E_INCREMENTAR_HORAS_DECENAS:	
+		LDI		R16, 0
+		STS		HORAS_UNIDADES, R16
+		LDS		R16, HORAS_DECENAS
+		INC		R16
+		STS		HORAS_DECENAS, R16
+		RJMP	SALIR_DE_INCREMENTAR_HORAS
+	SALIR_DE_INCREMENTAR_HORAS:
+		RET
+
+INCREMENTAR_DIAS:
+	;¡Teniendo cuidado de reiniciar DIAS_UNIDADES e incrementar DIAS_DECENAS de ser necesario!
+	;Si DIAS=DIAS_DEL_MES, depende del paso en que nos encontremos el determinar qué hacer con ello
+	LDS		R16, DIAS_UNIDADES
+	INC		R16
+	CPI		R16, 10
+	BREQ	REINICIAR_DIAS_UNIDADES_E_INCREMENTAR_DIAS_DECENAS
+	;Si DIAS_UNIDADES!=10, solo lo guardamos...
+	STS		DIAS_UNIDADES, R16
+	RJMP	SALIR_DE_INCREMENTAR_DIAS
+	REINICIAR_DIAS_UNIDADES_E_INCREMENTAR_DIAS_DECENAS:
+		LDI		R16, 0
+		STS		DIAS_UNIDADES, R16
+		LDS		R16, DIAS_DECENAS
+		INC		R16
+		STS		DIAS_DECENAS, R16
+		RJMP	SALIR_DE_INCREMENTAR_DIAS
+	SALIR_DE_INCREMENTAR_DIAS:
+		RET
+
+INCREMENTAR_MESES:
+	RET
 ;***************************************************************************************************************************
 
 
